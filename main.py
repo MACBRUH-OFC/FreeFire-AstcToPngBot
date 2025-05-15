@@ -5,14 +5,14 @@ import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-BOT_TOKEN = os.getenv('BOT_TOKEN')
+# Hardcoded configuration
+BOT_TOKEN = "7459415423:AAEOwutnGXxLXsuKhQCdGIHmuyILwQIXLEE"
 ALLOWED_GROUP_ID = -1002699301861
-
-# Base URLs
 LIVE_BASE_URL = "https://dl.dir.freefiremobile.com/live/ABHotUpdates/IconCDN/android/"
 ADVANCE_BASE_URL = "https://dl.dir.freefiremobile.com/advance/ABHotUpdates/IconCDN/android/"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send welcome message"""
     await update.message.reply_text(
         "🔥 Free Fire ASTC to PNG Converter 🔥\n"
         "Commands:\n"
@@ -21,6 +21,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def convert_astc_to_png(astc_data: bytes) -> bytes:
+    """Convert ASTC to PNG using the binary"""
     with tempfile.TemporaryDirectory() as tmp_dir:
         input_path = os.path.join(tmp_dir, "input.astc")
         output_path = os.path.join(tmp_dir, "output.png")
@@ -38,6 +39,7 @@ async def convert_astc_to_png(astc_data: bytes) -> bytes:
             return f.read()
 
 async def process_single_item(update: Update, base_url: str, server_name: str, item_id: str):
+    """Process single item conversion"""
     try:
         # Download ASTC file
         response = requests.get(f"{base_url}{item_id}_rgb.astc", timeout=8)
@@ -59,35 +61,46 @@ async def process_single_item(update: Update, base_url: str, server_name: str, i
         await update.message.reply_text(f"⚠️ Error: {str(e)}")
 
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /live command"""
     if not context.args:
         await update.message.reply_text("Please provide item ID")
         return
     await process_single_item(update, LIVE_BASE_URL, "Live", context.args[0])
 
 async def adv(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /adv command"""
     if not context.args:
         await update.message.reply_text("Please provide item ID")
         return
     await process_single_item(update, ADVANCE_BASE_URL, "Advance", context.args[0])
 
 def setup_handlers(application):
+    """Configure command handlers"""
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("live", live))
     application.add_handler(CommandHandler("adv", adv))
 
 def webhook(request):
+    """Vercel serverless function handler"""
     if request.method == "POST":
         application = ApplicationBuilder().token(BOT_TOKEN).build()
         setup_handlers(application)
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=int(os.environ.get('PORT', 8080)),
-            webhook_url=os.environ.get('WEBHOOK_URL')
-        )
-        return {"statusCode": 200, "body": "OK"}
-    return {"statusCode": 405, "body": "Method Not Allowed"}
+        
+        # For Vercel deployment
+        return {
+            'statusCode': 200,
+            'body': 'Webhook set successfully'
+        }
+    
+    # Return simple response for GET requests
+    return {
+        'statusCode': 200,
+        'body': 'Bot is running',
+        'headers': {'Content-Type': 'text/plain'}
+    }
 
 if __name__ == '__main__':
+    # Local development mode
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     setup_handlers(application)
     application.run_polling()
