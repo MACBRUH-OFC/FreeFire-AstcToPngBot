@@ -3,10 +3,10 @@ import subprocess
 import tempfile
 import requests
 import logging
+import json
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram.ext import Application
-import json
 
 # Configure logging
 logging.basicConfig(
@@ -35,6 +35,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def convert_astc_to_png(astc_data: bytes) -> bytes:
     """Convert ASTC to PNG using the binary"""
     try:
+        if not os.path.exists("./astcenc"):
+            logger.error("astcenc binary not found")
+            raise FileNotFoundError("astcenc binary missing")
+        
         with tempfile.TemporaryDirectory() as tmp_dir:
             input_path = os.path.join(tmp_dir, "input.astc")
             output_path = os.path.join(tmp_dir, "output.png")
@@ -42,21 +46,28 @@ async def convert_astc_to_png(astc_data: bytes) -> bytes:
             with open(input_path, 'wb') as f:
                 f.write(astc_data)
             
-            subprocess.run(
+            result = subprocess.run(
                 ["./astcenc", "-d", input_path, output_path, "8x8", "-fast"],
                 check=True,
                 timeout=15,
                 capture_output=True
             )
+            logger.info(f"astcenc output: {result.stdout.decode()}")
             
             with open(output_path, 'rb') as f:
                 return f.read()
+    except FileNotFoundError as e:
+        logger.error(f"ASTCENC binary error: {str(e)}")
+        raise
     except subprocess.CalledProcessError as e:
         logger.error(f"ASTCENC failed: {e.stderr.decode()}")
-        raise Exception("Conversion failed")
+        raise Exception(f"Conversion failed: {e.stderr.decode()}")
     except subprocess.TimeoutExpired:
         logger.error("ASTCENC timed out")
         raise Exception("Conversion timed out")
+    except Exception as e:
+        logger.error(f"Unexpected error in conversion: {str(e)}")
+        raise
 
 async def process_single_item(update: Update, base_url: str, server_name: str, item_id: str):
     """Process single item conversion"""
@@ -108,32 +119,46 @@ def setup_handlers(application: Application):
 
 async def handle_webhook(update: dict, application: Application):
     """Process incoming webhook updates"""
-    await application.initialize()
-    await application.process_update(Update.de_json(update, application.bot))
-    await application.shutdown()
+    try:
+        await application.initialize()
+        await application.process_update(Update.de_json(update, application.bot))
+        await application.shutdown()
+    except Exception as e:
+        logger.error(f"Error processing webhook update: {str(e)}")
+        raise
 
 def webhook(request):
     """Vercel serverless function handler"""
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
-    setup_handlers(application)
-    
-    if request.method == "POST":
-        try:
+    try:
+        # Health check endpoint
+        if request.method == "GET":
+            return {
+                'statusCode': 200,
+                'body': json.dumps({'status': 'Bot is running', 'astcenc_exists': os.path.exists('./astcenc')}),
+                'headers': {'Content-Type': 'application/json'}
+            }
+        
+        if request.method == "POST":
             update = request.get_json()
+            if not update:
+                logger.error("Invalid or empty JSON payload")
+                return {
+                    'statusCode': 400,
+                    'body': json.dumps({'error': 'Invalid JSON payload'})
+                }
+            
+            application = ApplicationBuilder().token(BOT_TOKEN).build()
+            setup_handlers(application)
             application.run_async(handle_webhook(update, application))
+            
             return {
                 'statusCode': 200,
                 'body': json.dumps({'status': 'success'})
             }
-        except Exception as e:
-            logger.error(f"Webhook error: {str(e)}")
-            return {
-                'statusCode': 500,
-                'body': json.dumps({'error': str(e)})
-            }
-    
-    return {
-        'statusCode': 200,
-        'body': json.dumps({'status': 'Bot is running'}),
-        'headers': {'Content-Type': 'application/json'}
-    }
+    except Exception as e:
+        logger.error(f"Webhook error: {str(e)}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': str(e)}),
+            'headers': {'Content-Type': 'application/json'}
+        }
