@@ -1,5 +1,11 @@
 {
   "version": 2,
+  "functions": {
+    "main.py": {
+      "runtime": "python@3.12",
+      "handler": "main.handler"
+    }
+  },
   "builds": [
     {
       "src": "main.py",
