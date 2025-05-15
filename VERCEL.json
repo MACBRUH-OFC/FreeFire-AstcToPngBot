@@ -1,11 +1,5 @@
 {
   "version": 2,
-  "functions": {
-    "main.py": {
-      "runtime": "python@3.12",
-      "handler": "main.handler"
-    }
-  },
   "builds": [
     {
       "src": "main.py",
@@ -20,9 +14,14 @@
   ],
   "routes": [
     {
+      "src": "/",
+      "methods": ["GET", "POST"],
+      "dest": "main.py"
+    },
+    {
       "src": "/(.*)",
-      "dest": "main.py",
-      "methods": ["GET", "POST"]
+      "methods": ["GET", "POST"],
+      "dest": "main.py"
     }
   ]
 }
