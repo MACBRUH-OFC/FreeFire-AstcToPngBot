@@ -6,7 +6,7 @@ import logging
 import json
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from telegram.ext import Application
+from aiohttp import web
 
 # Configure logging
 logging.basicConfig(
@@ -19,6 +19,9 @@ BOT_TOKEN = "7459415423:AAEOwutnGXxLXsuKhQCdGIHmuyILwQIXLEE"
 ALLOWED_GROUP_ID = -1002699301861
 LIVE_BASE_URL = "https://dl.dir.freefiremobile.com/live/ABHotUpdates/IconCDN/android/"
 ADVANCE_BASE_URL = "https://dl.dir.freefiremobile.com/advance/ABHotUpdates/IconCDN/android/"
+
+# Initialize Telegram application
+application = ApplicationBuilder().token(BOT_TOKEN).build()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send welcome message"""
@@ -111,54 +114,73 @@ async def adv(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await process_single_item(update, ADVANCE_BASE_URL, "Advance", context.args[0])
 
-def setup_handlers(application: Application):
+def setup_handlers():
     """Configure command handlers"""
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("live", live))
     application.add_handler(CommandHandler("adv", adv))
 
-async def handle_webhook(update: dict, application: Application):
-    """Process incoming webhook updates"""
+async def handle_webhook(request):
+    """Handle incoming webhook requests"""
     try:
-        await application.initialize()
-        await application.process_update(Update.de_json(update, application.bot))
-        await application.shutdown()
-    except Exception as e:
-        logger.error(f"Error processing webhook update: {str(e)}")
-        raise
-
-def webhook(request):
-    """Vercel serverless function handler"""
-    try:
-        # Health check endpoint
         if request.method == "GET":
-            return {
-                'statusCode': 200,
-                'body': json.dumps({'status': 'Bot is running', 'astcenc_exists': os.path.exists('./astcenc')}),
-                'headers': {'Content-Type': 'application/json'}
-            }
+            return web.json_response({
+                "status": "Bot is running",
+                "astcenc_exists": os.path.exists("./astcenc")
+            })
         
         if request.method == "POST":
-            update = request.get_json()
+            update = await request.json()
             if not update:
                 logger.error("Invalid or empty JSON payload")
-                return {
-                    'statusCode': 400,
-                    'body': json.dumps({'error': 'Invalid JSON payload'})
-                }
+                return web.json_response({"error": "Invalid JSON payload"}, status=400)
             
-            application = ApplicationBuilder().token(BOT_TOKEN).build()
-            setup_handlers(application)
-            application.run_async(handle_webhook(update, application))
+            await application.initialize()
+            await application.process_update(Update.de_json(update, application.bot))
+            await application.shutdown()
             
-            return {
-                'statusCode': 200,
-                'body': json.dumps({'status': 'success'})
-            }
+            return web.json_response({"status": "success"})
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}")
+        return web.json_response({"error": str(e)}, status=500)
+
+# Set up aiohttp app
+app = web.Application()
+app.router.add_post("/", handle_webhook)
+app.router.add_get("/", handle_webhook)
+
+# Vercel serverless function handler
+async def handler(event, context):
+    """Vercel-compatible handler"""
+    try:
+        # Initialize handlers once
+        setup_handlers()
+        
+        # Create a request object from event
+        method = event["httpMethod"]
+        headers = event.get("headers", {})
+        body = event.get("body", None)
+        
+        # Create an aiohttp request
+        request = web.Request(
+            method=method,
+            path="/",
+            headers=headers,
+            body=body.encode() if body else b""
+        )
+        
+        # Process the request
+        response = await handle_webhook(request)
+        
         return {
-            'statusCode': 500,
-            'body': json.dumps({'error': str(e)}),
-            'headers': {'Content-Type': 'application/json'}
+            "statusCode": response.status,
+            "headers": dict(response.headers),
+            "body": response.body.decode() if response.body else ""
+        }
+    except Exception as e:
+        logger.error(f"Handler error: {str(e)}")
+        return {
+            "statusCode": 500,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"error": str(e)})
         }
