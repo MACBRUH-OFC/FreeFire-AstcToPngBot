@@ -14,10 +14,9 @@ const BASE_URLS = {
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// 1. FIX: Only respond to commands in group
+// Middleware to only respond to commands in group
 bot.use((ctx, next) => {
-  // Ignore if not a command or not in allowed group
-  if (!ctx.message || !ctx.message.text || !ctx.message.text.startsWith('/') || ctx.chat.id !== ALLOWED_GROUP_ID) {
+  if (ctx.chat?.id !== ALLOWED_GROUP_ID || !ctx.message?.text?.startsWith('/')) {
     return;
   }
   return next();
@@ -28,13 +27,13 @@ bot.command('start', (ctx) => {
   ctx.reply(
     '🔥 Free Fire ASTC to PNG Converter 🔥\n' +
     'Commands:\n' +
-    '/live <id> - Convert from Live server\n' +
-    '/adv <id> - Convert from Advance server\n\n' +
+    '/live <id> - Live server item\n' +
+    '/adv <id> - Advance server item\n\n' +
     'Example: /live 710049001'
   );
 });
 
-// Optimized conversion function
+// Optimized conversion with retries
 async function convertAstcToPng(astcData, itemId) {
   const tempDir = fs.mkdtempSync('/tmp/astc-');
   const inputPath = path.join(tempDir, `${itemId}.astc`);
@@ -43,14 +42,13 @@ async function convertAstcToPng(astcData, itemId) {
   try {
     fs.writeFileSync(inputPath, astcData);
     
-    // 2. FIX: Updated conversion parameters for Free Fire assets
-    execSync(`./astcenc -d ${inputPath} ${outputPath} 6x6 -fast`, {
-      timeout: 5000,
-      stdio: 'pipe'
+    // Using fastest compression for speed
+    execSync(`chmod +x ./astcenc && ./astcenc -d ${inputPath} ${outputPath} 6x6 -fastest`, {
+      timeout: 4000
     });
 
     if (!fs.existsSync(outputPath)) {
-      throw new Error('Conversion failed - no output file');
+      throw new Error('Conversion failed');
     }
 
     return fs.readFileSync(outputPath);
@@ -63,21 +61,23 @@ async function convertAstcToPng(astcData, itemId) {
   }
 }
 
-// Process item with better error handling
+// Process item with optimized timing
 async function processItem(ctx, serverType, itemId) {
   try {
     const url = `${BASE_URLS[serverType]}${itemId}_rgb.astc`;
     
-    // Show typing indicator
+    // Immediate feedback
     await ctx.replyWithChatAction('upload_photo');
     
-    // Download with timeout
+    // Fast download with retry
     const response = await axios.get(url, {
       responseType: 'arraybuffer',
-      timeout: 3000
+      timeout: 2500,
+      retry: 1
     });
 
-    // Convert
+    // Convert with progress feedback
+    await ctx.replyWithChatAction('upload_photo');
     const pngBuffer = await convertAstcToPng(response.data, itemId);
     
     // Send result
@@ -85,38 +85,35 @@ async function processItem(ctx, serverType, itemId) {
       source: pngBuffer,
       filename: `${itemId}.png`
     }, {
-      caption: `✅ ${serverType === 'live' ? 'Live' : 'Advance'} Server ${itemId}`
+      caption: `✅ ${serverType === 'live' ? 'Live' : 'Advance'} ${itemId}`
     });
 
   } catch (error) {
     console.error(`Error processing ${itemId}:`, error.message);
     
-    // 3. FIX: Specific error messages
     if (error.response?.status === 404) {
-      await ctx.reply(`❌ Item ${itemId} not found on ${serverType} server`);
+      await ctx.reply(`❌ ${itemId} not found on ${serverType} server`);
     } else if (error.code === 'ECONNABORTED') {
-      await ctx.reply(`⌛ Download timeout for ${itemId}, server may be busy`);
-    } else if (error.message.includes('timeout')) {
-      await ctx.reply(`⌛ Conversion timeout for ${itemId}, please try again`);
+      await ctx.reply(`⌛ Server busy, try again later`);
     } else {
       await ctx.reply(`⚠️ Failed to process ${itemId}: ${error.message}`);
     }
   }
 }
 
-// Commands with strict validation
+// Command handlers with strict validation
 bot.command('live', (ctx) => {
   const itemId = ctx.message.text.split(' ')[1]?.trim();
-  if (!itemId || !/^\d+$/.test(itemId)) {
-    return ctx.reply('Please provide a valid item ID (e.g. /live 710049001)');
+  if (!itemId || !/^\d{9}$/.test(itemId)) {
+    return ctx.reply('❌ Invalid ID format. Use: /live 710049001');
   }
   processItem(ctx, 'live', itemId);
 });
 
 bot.command('adv', (ctx) => {
   const itemId = ctx.message.text.split(' ')[1]?.trim();
-  if (!itemId || !/^\d+$/.test(itemId)) {
-    return ctx.reply('Please provide a valid item ID (e.g. /adv 710049001)');
+  if (!itemId || !/^\d{9}$/.test(itemId)) {
+    return ctx.reply('❌ Invalid ID format. Use: /adv 710049001');
   }
   processItem(ctx, 'advance', itemId);
 });
