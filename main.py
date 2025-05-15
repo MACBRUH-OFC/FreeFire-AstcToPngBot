@@ -6,7 +6,7 @@ import logging
 import json
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from aiohttp import web
+from telegram.ext import Application
 
 # Configure logging
 logging.basicConfig(
@@ -19,9 +19,6 @@ BOT_TOKEN = "7459415423:AAEOwutnGXxLXsuKhQCdGIHmuyILwQIXLEE"
 ALLOWED_GROUP_ID = -1002699301861
 LIVE_BASE_URL = "https://dl.dir.freefiremobile.com/live/ABHotUpdates/IconCDN/android/"
 ADVANCE_BASE_URL = "https://dl.dir.freefiremobile.com/advance/ABHotUpdates/IconCDN/android/"
-
-# Initialize Telegram application
-application = ApplicationBuilder().token(BOT_TOKEN).build()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send welcome message"""
@@ -114,68 +111,75 @@ async def adv(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await process_single_item(update, ADVANCE_BASE_URL, "Advance", context.args[0])
 
-def setup_handlers():
+def setup_handlers(application: Application):
     """Configure command handlers"""
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("live", live))
     application.add_handler(CommandHandler("adv", adv))
 
-async def handle_webhook(request):
-    """Handle incoming webhook requests"""
+async def handle_update(update: dict, application: Application):
+    """Process Telegram update"""
     try:
-        if request.method == "GET":
-            return web.json_response({
-                "status": "Bot is running",
-                "astcenc_exists": os.path.exists("./astcenc")
-            })
-        
-        if request.method == "POST":
-            update = await request.json()
-            if not update:
-                logger.error("Invalid or empty JSON payload")
-                return web.json_response({"error": "Invalid JSON payload"}, status=400)
-            
-            await application.initialize()
-            await application.process_update(Update.de_json(update, application.bot))
-            await application.shutdown()
-            
-            return web.json_response({"status": "success"})
+        await application.initialize()
+        await application.process_update(Update.de_json(update, application.bot))
+        await application.shutdown()
     except Exception as e:
-        logger.error(f"Webhook error: {str(e)}")
-        return web.json_response({"error": str(e)}, status=500)
+        logger.error(f"Error processing update: {str(e)}")
+        raise
 
-# Set up aiohttp app
-app = web.Application()
-app.router.add_post("/", handle_webhook)
-app.router.add_get("/", handle_webhook)
-
-# Vercel serverless function handler
-async def handler(event, context):
-    """Vercel-compatible handler"""
+def handler(event, context):
+    """Vercel serverless function handler"""
     try:
-        # Initialize handlers once
-        setup_handlers()
+        # Initialize Telegram application
+        application = ApplicationBuilder().token(BOT_TOKEN).build()
+        setup_handlers(application)
         
-        # Create a request object from event
-        method = event["httpMethod"]
-        headers = event.get("headers", {})
-        body = event.get("body", None)
+        # Handle HTTP method
+        method = event.get("httpMethod", "GET")
         
-        # Create an aiohttp request
-        request = web.Request(
-            method=method,
-            path="/",
-            headers=headers,
-            body=body.encode() if body else b""
-        )
+        if method == "GET":
+            return {
+                "statusCode": 200,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({
+                    "status": "Bot is running",
+                    "astcenc_exists": os.path.exists("./astcenc")
+                })
+            }
         
-        # Process the request
-        response = await handle_webhook(request)
+        if method == "POST":
+            body = event.get("body", "")
+            if not body:
+                logger.error("Empty POST body")
+                return {
+                    "statusCode": 400,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": json.dumps({"error": "Empty POST body"})
+                }
+            
+            try:
+                update = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON: {str(e)}")
+                return {
+                    "statusCode": 400,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": json.dumps({"error": "Invalid JSON"})
+                }
+            
+            # Process Telegram update
+            application.run_async(handle_update(update, application))
+            
+            return {
+                "statusCode": 200,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({"status": "success"})
+            }
         
         return {
-            "statusCode": response.status,
-            "headers": dict(response.headers),
-            "body": response.body.decode() if response.body else ""
+            "statusCode": 405,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"error": "Method not allowed"})
         }
     except Exception as e:
         logger.error(f"Handler error: {str(e)}")
