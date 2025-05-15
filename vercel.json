@@ -6,7 +6,8 @@
       "use": "@vercel/python",
       "config": {
         "maxLambdaSize": "15mb",
-        "includeFiles": ["astcenc"]
+        "includeFiles": ["astcenc"],
+        "buildCommand": "chmod +x astcenc && pip install -r requirements.txt"
       }
     }
   ],
