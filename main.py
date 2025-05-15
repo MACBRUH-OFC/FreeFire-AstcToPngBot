@@ -4,6 +4,7 @@ import tempfile
 import requests
 import logging
 import json
+import base64
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram.ext import Application
@@ -130,12 +131,17 @@ async def handle_update(update: dict, application: Application):
 def handler(event, context):
     """Vercel serverless function handler"""
     try:
+        logger.info(f"Received event: {json.dumps(event)}")
+        
         # Initialize Telegram application
         application = ApplicationBuilder().token(BOT_TOKEN).build()
         setup_handlers(application)
         
         # Handle HTTP method
         method = event.get("httpMethod", "GET")
+        path = event.get("path", "/")
+        
+        logger.info(f"Handling {method} request to {path}")
         
         if method == "GET":
             return {
@@ -143,11 +149,12 @@ def handler(event, context):
                 "headers": {"Content-Type": "application/json"},
                 "body": json.dumps({
                     "status": "Bot is running",
+                    "path": path,
                     "astcenc_exists": os.path.exists("./astcenc")
                 })
             }
         
-        if method == "POST":
+        if method == "POST" and path == "/":
             body = event.get("body", "")
             if not body:
                 logger.error("Empty POST body")
@@ -157,14 +164,17 @@ def handler(event, context):
                     "body": json.dumps({"error": "Empty POST body"})
                 }
             
+            # Handle base64-encoded body (Vercel may encode POST bodies)
             try:
+                if event.get("isBase64Encoded", False):
+                    body = base64.b64decode(body).decode("utf-8")
                 update = json.loads(body)
-            except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON: {str(e)}")
+            except (json.JSONDecodeError, base64.binascii.Error) as e:
+                logger.error(f"Invalid JSON or base64: {str(e)}")
                 return {
                     "statusCode": 400,
                     "headers": {"Content-Type": "application/json"},
-                    "body": json.dumps({"error": "Invalid JSON"})
+                    "body": json.dumps({"error": "Invalid JSON or base64"})
                 }
             
             # Process Telegram update
@@ -176,10 +186,11 @@ def handler(event, context):
                 "body": json.dumps({"status": "success"})
             }
         
+        logger.warning(f"Unhandled request: {method} {path}")
         return {
-            "statusCode": 405,
+            "statusCode": 404,
             "headers": {"Content-Type": "application/json"},
-            "body": json.dumps({"error": "Method not allowed"})
+            "body": json.dumps({"error": "Not found"})
         }
     except Exception as e:
         logger.error(f"Handler error: {str(e)}")
