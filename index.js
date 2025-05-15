@@ -14,13 +14,27 @@ const BASE_URLS = {
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// 1. FIX: Add instant response middleware
-bot.use(async (ctx, next) => {
-  await ctx.replyWithChatAction('upload_photo'); // Show "uploading" status immediately
+// 1. FIX: Only respond to commands in group
+bot.use((ctx, next) => {
+  // Ignore if not a command or not in allowed group
+  if (!ctx.message || !ctx.message.text || !ctx.message.text.startsWith('/') || ctx.chat.id !== ALLOWED_GROUP_ID) {
+    return;
+  }
   return next();
 });
 
-// 2. FIX: Optimized conversion function
+// Start command
+bot.command('start', (ctx) => {
+  ctx.reply(
+    '🔥 Free Fire ASTC to PNG Converter 🔥\n' +
+    'Commands:\n' +
+    '/live <id> - Convert from Live server\n' +
+    '/adv <id> - Convert from Advance server\n\n' +
+    'Example: /live 710049001'
+  );
+});
+
+// Optimized conversion function
 async function convertAstcToPng(astcData, itemId) {
   const tempDir = fs.mkdtempSync('/tmp/astc-');
   const inputPath = path.join(tempDir, `${itemId}.astc`);
@@ -29,8 +43,8 @@ async function convertAstcToPng(astcData, itemId) {
   try {
     fs.writeFileSync(inputPath, astcData);
     
-    // 3. FIX: Added proper error handling for binary execution
-    execSync(`chmod +x ./astcenc && ./astcenc -d ${inputPath} ${outputPath} 6x6 -thorough`, {
+    // 2. FIX: Updated conversion parameters for Free Fire assets
+    execSync(`./astcenc -d ${inputPath} ${outputPath} 6x6 -fast`, {
       timeout: 5000,
       stdio: 'pipe'
     });
@@ -49,27 +63,21 @@ async function convertAstcToPng(astcData, itemId) {
   }
 }
 
-// 4. FIX: Improved item processing with retries
+// Process item with better error handling
 async function processItem(ctx, serverType, itemId) {
   try {
     const url = `${BASE_URLS[serverType]}${itemId}_rgb.astc`;
     
-    // First quick check if file exists
-    const headResponse = await axios.head(url, { timeout: 2000 });
-    if (headResponse.status !== 200) {
-      throw new Error('File not found');
-    }
-
-    // Download with progress
+    // Show typing indicator
+    await ctx.replyWithChatAction('upload_photo');
+    
+    // Download with timeout
     const response = await axios.get(url, {
       responseType: 'arraybuffer',
-      timeout: 3000,
-      onDownloadProgress: (p) => {
-        if (p.progress === 1) ctx.replyWithChatAction('upload_photo');
-      }
+      timeout: 3000
     });
 
-    // Conversion
+    // Convert
     const pngBuffer = await convertAstcToPng(response.data, itemId);
     
     // Send result
@@ -83,27 +91,33 @@ async function processItem(ctx, serverType, itemId) {
   } catch (error) {
     console.error(`Error processing ${itemId}:`, error.message);
     
-    // 5. FIX: Specific error messages
-    if (error.message.includes('404') || error.message.includes('File not found')) {
+    // 3. FIX: Specific error messages
+    if (error.response?.status === 404) {
       await ctx.reply(`❌ Item ${itemId} not found on ${serverType} server`);
+    } else if (error.code === 'ECONNABORTED') {
+      await ctx.reply(`⌛ Download timeout for ${itemId}, server may be busy`);
     } else if (error.message.includes('timeout')) {
-      await ctx.reply(`⌛ Timeout processing ${itemId}, please try again`);
+      await ctx.reply(`⌛ Conversion timeout for ${itemId}, please try again`);
     } else {
       await ctx.reply(`⚠️ Failed to process ${itemId}: ${error.message}`);
     }
   }
 }
 
-// Commands
+// Commands with strict validation
 bot.command('live', (ctx) => {
   const itemId = ctx.message.text.split(' ')[1]?.trim();
-  if (!itemId) return ctx.reply('Please provide item ID (e.g. /live 710048001)');
+  if (!itemId || !/^\d+$/.test(itemId)) {
+    return ctx.reply('Please provide a valid item ID (e.g. /live 710049001)');
+  }
   processItem(ctx, 'live', itemId);
 });
 
 bot.command('adv', (ctx) => {
   const itemId = ctx.message.text.split(' ')[1]?.trim();
-  if (!itemId) return ctx.reply('Please provide item ID (e.g. /adv 710048001)');
+  if (!itemId || !/^\d+$/.test(itemId)) {
+    return ctx.reply('Please provide a valid item ID (e.g. /adv 710049001)');
+  }
   processItem(ctx, 'advance', itemId);
 });
 
